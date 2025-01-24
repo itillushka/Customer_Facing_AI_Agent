@@ -1,49 +1,34 @@
-from openai import OpenAI
-from pydantic import BaseModel
-from typing import Optional
-import json
-import inspect
+import chainlit as cl
 from dotenv import load_dotenv
 import os
+import json
+import inspect
+from pydantic import BaseModel
+from typing import Optional, List, Dict
+from openai import AsyncOpenAI
 
 load_dotenv()
 
 api_key = os.getenv("OPENAI_API_KEY")
-
-client = OpenAI(api_key=api_key)
-
+client = AsyncOpenAI(api_key=api_key)
 
 class Agent(BaseModel):
-    name: str = "Agent"
+    name: str
     model: str = "gpt-4o-mini"
-    instructions: str = "You are a helpful Agent"
-    tools: list = []
+    instructions: str
+    tools: List
 
 class Response(BaseModel):
-    agent: Optional[Agent]
-    messages: list
+    agent: Agent
+    messages: List[Dict[str, str]]
 
-# Customer Service Routine
-
-system_message = (
-    "You are a customer support agent for ACME Inc."
-    "Always answer in a sentence or less."
-    "Follow the following routine with the user:"
-    "1. First, ask probing questions and understand the user's problem deeper.\n"
-    " - unless the user has already provided a reason.\n"
-    "2. Propose a fix (make one up).\n"
-    "3. ONLY if not satesfied, offer a refund.\n"
-    "4. If accepted, search for the ID and then execute refund."
-    ""
-)
-
+# Define your tools and other functions here
 def look_up_item(search_query):
     """Use to find item ID.
     Search query can be a description or keywords."""
     item_id = "item_132612938"
     print("Found item:", item_id)
     return item_id
-
 
 def execute_refund(item_id, reason="not provided"):
     print("\n\n=== Refund Summary ===")
@@ -79,24 +64,20 @@ def transfer_to_sales_agent():
     """User for anything sales or buying related."""
     return sales_agent
 
-
 def transfer_to_issues_and_repairs():
     """User for issues, repairs, or refunds."""
     return issues_and_repairs_agent
-
 
 def transfer_back_to_triage():
     """Call this if the user brings up a topic outside of your purview,
     including escalating to human."""
     return triage_agent
 
-
 def place_order(item_name):
     return "success"
 
 def transfer_to_refunds():
     return refund_agent
-
 
 triage_agent = Agent(
     name="Triage Agent",
@@ -156,27 +137,24 @@ sales_assistant = Agent(
 
 tools = [execute_refund, look_up_item]
 
-def run_full_turn(agent, messages):
-
+async def run_full_turn(agent: Agent, messages: List[Dict[str, str]]) -> Response:
     current_agent = agent
     num_init_messages = len(messages)
     messages = messages.copy()
 
     while True:
-
         # turn python functions into tools and save a reverse map
         tool_schemas = [function_to_schema(tool) for tool in current_agent.tools]
         tools = {tool.__name__: tool for tool in current_agent.tools}
 
         # === 1. get openai completion ===
-        response = client.chat.completions.create(
+        response = await client.chat.completions.create(
             model=agent.model,
-            messages=[{"role": "system", "content": current_agent.instructions}]
-            + messages,
+            messages=[{"role": "system", "content": current_agent.instructions}] + messages,
             tools=tool_schemas or None,
         )
         message = response.choices[0].message
-        messages.append(message)
+        messages.append({"role": message.role, "content": message.content})
 
         if message.content:  # print agent response
             print(f"{current_agent.name}:", message.content)
@@ -185,15 +163,12 @@ def run_full_turn(agent, messages):
             break
 
         # === 2. handle tool calls ===
-
         for tool_call in message.tool_calls:
             result = execute_tool_call(tool_call, tools, current_agent.name)
 
-            if type(result) is Agent:  # if agent transfer, update current agent
+            if isinstance(result, Agent):  # if agent transfer, update current agent
                 current_agent = result
-                result = (
-                    f"Transfered to {current_agent.name}. Adopt persona immediately."
-                )
+                result = f"Transferred to {current_agent.name}. Adopt persona immediately."
 
             result_message = {
                 "role": "tool",
@@ -203,8 +178,8 @@ def run_full_turn(agent, messages):
             messages.append(result_message)
 
     # ==== 3. return last agent used and new messages =====
+    print("Final messages:", messages)
     return Response(agent=current_agent, messages=messages[num_init_messages:])
-
 
 def execute_tool_call(tool_call, tools, agent_name):
     name = tool_call.function.name
@@ -228,18 +203,14 @@ def function_to_schema(func) -> dict:
     try:
         signature = inspect.signature(func)
     except ValueError as e:
-        raise ValueError(
-            f"Failed to get signature for function {func.__name__}: {str(e)}"
-        )
+        raise ValueError(f"Failed to get signature for function {func.__name__}: {str(e)}")
 
     parameters = {}
     for param in signature.parameters.values():
         try:
             param_type = type_map.get(param.annotation, "string")
         except KeyError as e:
-            raise KeyError(
-                f"Unknown type annotation {param.annotation} for parameter {param.name}: {str(e)}"
-            )
+            raise KeyError(f"Unknown type annotation {param.annotation} for parameter {param.name}: {str(e)}")
         parameters[param.name] = {"type": param_type}
 
     required = [
@@ -261,25 +232,29 @@ def function_to_schema(func) -> dict:
         },
     }
 
-
-
-def sample_function(param_1, param_2, the_third_one: int, some_optional="John Doe"):
-    """
-    This is my docstring. Call this function when you want.
-    """
-    print("Hello, world")
-
-schema =  function_to_schema(sample_function)
-print(json.dumps(schema, indent=2))
-
-
+# Initialize the agent and messages
 agent = triage_agent
 messages = []
 
-while True:
-    user = input("User: ")
-    messages.append({"role": "user", "content": user})
+@cl.on_message
+async def on_message(message: cl.Message):
+    global agent, messages
 
-    response = run_full_turn(agent, messages)
+    print("Received message:", message.content)
+    print("Current agent:", agent.name)
+
+    # Append the user message to the messages list
+    messages.append({"role": "user", "content": message.content})
+
+    # Run the full turn with the current agent and messages
+    response = await run_full_turn(agent, messages)
     agent = response.agent
+    print(f"Messages {response.messages}")
     messages.extend(response.messages)
+    # Send the agent's response back to the user
+    for msg in response.messages:
+        print('msg:', msg)
+        if msg["role"] == "assistant" and not msg["content"].startswith("transfer_"):
+            await cl.Message(content=msg["content"]).send()
+
+    print("Sent messages:", response.messages)

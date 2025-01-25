@@ -1,11 +1,12 @@
 import chainlit as cl
+from openai import AsyncOpenAI
 from dotenv import load_dotenv
 import os
 import json
 import inspect
 from pydantic import BaseModel
 from typing import Optional, List, Dict
-from openai import AsyncOpenAI
+
 
 load_dotenv()
 

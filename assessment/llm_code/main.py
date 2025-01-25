@@ -1,21 +1,23 @@
-from openai import OpenAI
 from pydantic import BaseModel
 from typing import Optional
 import json
 import inspect
-from dotenv import load_dotenv
 import os
+from dotenv import load_dotenv
 from agents import Agent, Response, qa_agent, scheduling_agent, feedback_agent
-from langflow_setup import chat_with_feedback
 import chainlit as cl
+from openai import AsyncOpenAI
 
 load_dotenv()
-
+cl.instrument_openai()
 api_key = os.getenv("OPENAI_API_KEY")
+client = AsyncOpenAI(api_key=api_key)
 
-client = OpenAI(api_key=api_key)
+# Store messages and agent context globally for simplicity
+agent = qa_agent
+messages = []
 
-def run_full_turn(agent, messages):
+async def run_full_turn(agent, messages):
     current_agent = agent
     num_init_messages = len(messages)
     messages = messages.copy()
@@ -26,7 +28,7 @@ def run_full_turn(agent, messages):
         tools = {tool.__name__: tool for tool in current_agent.tools}
 
         # === 1. Get OpenAI completion ===
-        response = client.chat.completions.create(
+        response = await client.chat.completions.create(
             model=agent.model,
             messages=[{"role": "system", "content": current_agent.instructions}]
             + messages,
@@ -59,18 +61,21 @@ def run_full_turn(agent, messages):
             messages.append(result_message)
 
     # === 3. Return last agent used and new messages ===
-    return Response(agent=current_agent, messages=messages[num_init_messages:])
+    yield Response(agent=current_agent, messages=messages[num_init_messages:])
 
 
 def execute_tool_call(tool_call, tools, agent_name):
+    """Executes the corresponding tool function with its arguments."""
     name = tool_call.function.name
     args = json.loads(tool_call.function.arguments)
 
-    print(f"{agent_name}:", f"{name}({args})")
+    print(f"{agent_name}: {name}({args})")
 
-    return tools[name](**args)  # Call corresponding function with provided arguments
+    return tools[name](**args)
 
-def function_to_schema(func) -> dict:
+
+def function_to_schema(func):
+    """Converts Python functions into LangChain tool schema."""
     type_map = {
         str: "string",
         int: "integer",
@@ -84,23 +89,15 @@ def function_to_schema(func) -> dict:
     try:
         signature = inspect.signature(func)
     except ValueError as e:
-        raise ValueError(
-            f"Failed to get signature for function {func.__name__}: {str(e)}"
-        )
+        raise ValueError(f"Failed to get signature for function {func.__name__}: {str(e)}")
 
     parameters = {}
     for param in signature.parameters.values():
-        try:
-            param_type = type_map.get(param.annotation, "string")
-        except KeyError as e:
-            raise KeyError(
-                f"Unknown type annotation {param.annotation} for parameter {param.name}: {str(e)}"
-            )
+        param_type = type_map.get(param.annotation, "string")
         parameters[param.name] = {"type": param_type}
 
     required = [
-        param.name
-        for param in signature.parameters.values()
+        param.name for param in signature.parameters.values()
         if param.default == inspect._empty
     ]
 
@@ -117,19 +114,25 @@ def function_to_schema(func) -> dict:
         },
     }
 
-agent = qa_agent
-messages = []
+@cl.on_message
+async def handle_message(message: cl.Message):
+    """Chainlit message handler."""
+    global agent, messages
 
-# Start interactive chatbot with feedback collection
-while True:
-    user = input("User: ")
-    messages.append({"role": "user", "content": user})
+    # Append user message to conversation
+    messages.append({"role": "user", "content": message.content})
 
-    response = run_full_turn(agent, messages)
-    agent = response.agent
-    messages.extend(response.messages)
+    # Run the interaction
+    async for response in run_full_turn(agent, messages):
+        print(response)
+        # At this point, `response` is a Response object
+        # Access the content directly from the response object
+        final_response = response.messages[-1].content
+        await cl.Message(content=f"{final_response}").send()
 
-    if agent.name == "Feedback Agent":
-        # Collect feedback only when Feedback Agent decides to do so
-        task_feedback = agent.tools[0]()  # Assuming `collect_human_feedback` is the first tool
-        print(f"Feedback captured: {task_feedback}")
+    # Update the global agent if transitioned
+    agent_context = agent.name
+    if agent_context == "Feedback Agent":
+        # Explicitly collect feedback via the feedback agent
+        feedback_result = feedback_agent.tools[0]()  # `collect_human_feedback`
+        await cl.Message(content=f"Feedback collected: {feedback_result}").send()

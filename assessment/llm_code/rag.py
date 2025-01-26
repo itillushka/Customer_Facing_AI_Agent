@@ -1,5 +1,5 @@
-from langchain.vectorstores import FAISS
-from langchain.embeddings.openai import OpenAIEmbeddings
+from langchain_community.vectorstores import FAISS
+from langchain_openai import OpenAIEmbeddings
 from langchain.schema import Document
 import pandas as pd
 import os
@@ -44,6 +44,9 @@ class DentalServiceRAG:
         """
         if not self.vector_store:
             raise ValueError("The data has not been indexed. Call load_and_index_data first.")
+
+        # Ensure top_k is an integer
+        top_k = int(top_k)
 
         results = self.vector_store.similarity_search(query, k=top_k)
         return [result.page_content for result in results]

@@ -37,6 +37,6 @@ Welcome to the Dental Clinic Chatbot! This project is designed to provide a conv
 Initial Screen
 ![First image!](/images/1.png "Initial Screen")
 Conversation Screen
-![Second image!](/images/1.png "Conversation Screen")
+![Second image!](/images/2.png "Conversation Screen")
 
 Enjoy using the Dental Clinic Chatbot! If you have any questions or need further assistance, feel free to reach out. ```

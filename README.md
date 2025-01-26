@@ -39,4 +39,5 @@ Initial Screen
 Conversation Screen
 ![Second image!](/images/2.png "Conversation Screen")
 
-Enjoy using the Dental Clinic Chatbot! If you have any questions or need further assistance, feel free to reach out. ```
+Enjoy using the Dental Clinic Chatbot! If you have any questions or need further assistance, feel free to reach out. 
+il.pastushok@gmail.com
